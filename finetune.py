@@ -32,15 +32,9 @@ def str2bool(v):
 
 # define a class with VOC structure so roughy data plays nicely with Gluon
 class VOCLike(VOCDetection):
-    # these are the original classes that are not consistent across the deployments [ECO 112320]
-    """
-    CLASSES = ['orange_roughy_edge', 'orange_roughy', 'sea_anemone', 'sea_urchin', 'oreo',
-               'whiptail', 'eel', 'shark', 'worm', 'misc_fish', 'mollusc', 'shrimp',
-               'sea_star']
-    """
+    
     # these are the 11 final classes after the merge operation [ECO 112320]
-    CLASSES = ['brittle_star', 'cnidaria', 'eel', 'misc_fish', 'mollusc', 'orange_roughy_edge', 
-               'orange_roughy', 'sea_anemone', 'sea_feather', 'sea_star','sea_urchin']
+    CLASSES = ['copepod', 'egg']
     
     #CLASSES = ['person','dog']
     def __init__(self, root, splits, transform=None, index_map=None, preload_label=True):
@@ -128,7 +122,7 @@ def train(network, training_data, validation_data, eval_metric, ctx, epcs=10, va
     
     #net.collect_params().reset_ctx(ctx)
     trainer = gluon.Trainer(
-        net.collect_params(), 'sgd',
+        network.collect_params(), 'sgd',
         {'learning_rate': 0.001, 'wd': 0.0005, 'momentum': 0.9})
     
     # learning rate decay (hard corded for now)
@@ -144,10 +138,10 @@ def train(network, training_data, validation_data, eval_metric, ctx, epcs=10, va
         smoothl1_metric.reset()
         tic = time.time()
         btic = time.time()
-        net.hybridize(static_alloc=True, static_shape=True)
+        network.hybridize(static_alloc=True, static_shape=True)
         
         # loop over the training data in batches
-        for i, batch in enumerate(train_data):
+        for i, batch in enumerate(training_data):
             batch_size = batch[0].shape[0]
             
             # load the images and annotations
@@ -158,7 +152,7 @@ def train(network, training_data, validation_data, eval_metric, ctx, epcs=10, va
                 cls_preds = []
                 box_preds = []
                 for x in data:
-                    cls_pred, box_pred, _ = net(x)
+                    cls_pred, box_pred, _ = network(x)
                     cls_preds.append(cls_pred)
                     box_preds.append(box_pred)
                 sum_loss, cls_loss, box_loss = mbox_loss(
@@ -178,7 +172,7 @@ def train(network, training_data, validation_data, eval_metric, ctx, epcs=10, va
             
         # Validation 
         if (epoch % val_int == 0):
-            map_name, mean_ap = validate(net, val_data, ctx, eval_metric)
+            map_name, mean_ap = validate(network, validation_data, ctx, eval_metric)
             val_msg = '\n'.join(['{}={}'.format(k, v) for k, v in zip(map_name, mean_ap)])
             #logger.info('[Epoch {}] Validation: \n{}'.format(epoch, val_msg))
             print(val_msg)
