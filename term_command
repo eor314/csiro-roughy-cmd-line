@@ -1,0 +1,1 @@
+python train_yolo.py --network mobilenet1.0 --dataset roughy --voc_base D:\csiro\csiro-aos-object-detection\VOCportALL --num-workers 2 --gpus '0' --epochs 10 --val-interval 2 --save-prefix D:\csiro\csiro-aos_object-detection\clf-output\yolo\ --no-random-shape

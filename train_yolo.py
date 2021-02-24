@@ -1,4 +1,9 @@
-"""Train YOLOv3 with random shapes."""
+"""
+Train YOLOv3 with random shapes.
+
+Modified to fine tune to roughy data from pre-trained weights
+"""
+
 import argparse
 import os
 import logging
@@ -22,11 +27,13 @@ from gluoncv.utils.metrics.voc_detection import VOC07MApMetric
 from gluoncv.utils.metrics.coco_detection import COCODetectionMetric
 from gluoncv.utils import LRScheduler, LRSequential
 
+
 from mxnet.contrib import amp
 try:
     import horovod.mxnet as hvd
 except ImportError:
     hvd = None
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train YOLO networks with random input shape.')
@@ -39,6 +46,8 @@ def parse_args():
                         help='Training mini-batch size')
     parser.add_argument('--dataset', type=str, default='voc',
                         help='Training dataset. Now support voc.')
+    parser.add_argument('--voc_base', metavar='voc_base', type=str, default='VOCportALL')
+    parser.add_argument('--train_yr', metavar='train_yr', type=str, default='OPall')
     parser.add_argument('--num-workers', '-j', dest='num_workers', type=int,
                         default=4, help='Number of data workers, you can use larger '
                         'number to accelerate data loading, if you CPU and GPUs are powerful.')
@@ -104,6 +113,24 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+
+# define a class with VOC structure so roughy data plays nicely with Gluon
+class VOCLike(gdata.VOCDetection):
+    # these are the original classes that are not consistent across the deployments [ECO 112320]
+    """
+    CLASSES = ['orange_roughy_edge', 'orange_roughy', 'sea_anemone', 'sea_urchin', 'oreo',
+               'whiptail', 'eel', 'shark', 'worm', 'misc_fish', 'mollusc', 'shrimp',
+               'sea_star']
+    """
+    # these are the 11 final classes after the merge operation [ECO 112320]
+    CLASSES = ['brittle_star', 'cnidaria', 'eel', 'misc_fish', 'mollusc', 'orange_roughy_edge',
+               'orange_roughy', 'sea_anemone', 'sea_feather', 'sea_star', 'sea_urchin']
+
+    # CLASSES = ['person','dog']
+    def __init__(self, root, splits, transform=None, index_map=None, preload_label=True):
+        super(VOCLike, self).__init__(root, splits, transform, index_map, preload_label)
+
+
 def get_dataset(dataset, args):
     if dataset.lower() == 'voc':
         train_dataset = gdata.VOCDetection(
@@ -117,6 +144,10 @@ def get_dataset(dataset, args):
         val_metric = COCODetectionMetric(
             val_dataset, args.save_prefix + '_eval', cleanup=True,
             data_shape=(args.data_shape, args.data_shape))
+    elif dataset.lower() == 'roughy':
+        train_dataset = VOCLike(root=args.voc_base, splits=(('OP', f'{args.train_yr}'+'\\train'),))
+        val_dataset = VOCLike(root=args.voc_base, splits=(('OP', f'{args.train_yr}'+'\\val'),))
+        val_metric = VOC07MApMetric(iou_thresh=0.5, class_names=val_dataset.classes)
     else:
         raise NotImplementedError('Dataset: {} not implemented.'.format(dataset))
     if args.num_samples < 0:
@@ -125,6 +156,7 @@ def get_dataset(dataset, args):
         from gluoncv.data import MixupDetection
         train_dataset = MixupDetection(train_dataset)
     return train_dataset, val_dataset, val_metric
+
 
 def get_dataloader(net, train_dataset, val_dataset, data_shape, batch_size, num_workers, args):
     """Get dataloader."""
@@ -145,6 +177,7 @@ def get_dataloader(net, train_dataset, val_dataset, data_shape, batch_size, num_
         batch_size, False, batchify_fn=val_batchify_fn, last_batch='keep', num_workers=num_workers)
     return train_loader, val_loader
 
+
 def save_params(net, best_map, current_map, epoch, save_interval, prefix):
     current_map = float(current_map)
     if current_map > best_map[0]:
@@ -154,6 +187,7 @@ def save_params(net, best_map, current_map, epoch, save_interval, prefix):
             f.write('{:04d}:\t{:.4f}\n'.format(epoch, current_map))
     if save_interval and epoch % save_interval == 0:
         net.save_parameters('{:s}_{:04d}_{:.4f}.params'.format(prefix, epoch, current_map))
+
 
 def validate(net, val_data, ctx, eval_metric):
     """Test on validation dataset."""
@@ -186,6 +220,7 @@ def validate(net, val_data, ctx, eval_metric):
         # update metric
         eval_metric.update(det_bboxes, det_ids, det_scores, gt_bboxes, gt_ids, gt_difficults)
     return eval_metric.get()
+
 
 def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
     """Training pipeline"""
@@ -322,6 +357,7 @@ def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
                 current_map = 0.
             save_params(net, best_map, current_map, epoch, args.save_interval, args.save_prefix)
 
+
 if __name__ == '__main__':
     args = parse_args()
 
@@ -345,7 +381,10 @@ if __name__ == '__main__':
         ctx = ctx if ctx else [mx.cpu()]
 
     # network
-    net_name = '_'.join(('yolo3', args.network, args.dataset))
+    if args.dataset == 'roughy':
+        net_name = '_'.join(('yolo3', args.network, 'voc'))
+    else:
+        net_name = '_'.join(('yolo3', args.network, args.dataset))
     args.save_prefix += net_name
     # use sync bn if specified
     if args.syncbn and len(ctx) > 1:
